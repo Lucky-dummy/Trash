@@ -16,11 +16,13 @@ constexpr UINT MAX_MATRIX_SIZE = 32u;
 constexpr UINT DEFAULT_SIZE = 3u;
 
 const TCHAR szWinClass[] = _T("Win32SampleApp");
-const TCHAR szWinName[] = _T("Win32SampleWindow");
 const TCHAR szCfgName[] = _T("TicTacToe.cfg");
 const TCHAR szSharedMemoryName[] = _T("Local\\TicTacToeFileMapping");
 const TCHAR szNPWinnerMessage[] = _T("Noughts won!");
 const TCHAR szCPWinnerMessage[] = _T("Crosses won!");
+const TCHAR szNoughtsTurnTitle[] = _T("TicTacTie: Noughts turn");
+const TCHAR szCrossesTurnTitle[] = _T("TicTacTie: Crosses turn");
+const TCHAR szWinName[] = _T("TicTacTie: Noughts turn");
 
 void RunNotepad(void) {
   STARTUPINFO sInfo;
@@ -32,7 +34,6 @@ void RunNotepad(void) {
   CreateProcess(_T("C:\\Windows\\Notepad.exe"), NULL, NULL, NULL, FALSE, 0,
                 NULL, NULL, &sInfo, &pInfo);
 }
-
 
 void UIntToUChar(const UINT& uint, UINT8* buffer) {
   buffer[0] = (uint >> 24);
@@ -108,7 +109,6 @@ class FIELD {
   UINT size, cellsFiled;
   HANDLE hMapFile;
   LPTSTR pBuf;
-
 };
 
 struct RESOLUTION {
@@ -153,13 +153,14 @@ class GAME {
   void DefineColorChangeState();
 
   void SendSynchMessage(UINT x, UINT y);
+  bool SetWinTitle(GAME_TURN);
 
   RESOLUTION res;
+  UINT wmSynch;
   FIELD field;
   COLOR bgColor, linesColor;
   COLOR_CHANGE_STATE linesColorChange;
   HWND hwnd;
-  UINT wmSynch;
 };
 
 GAME game;
@@ -176,27 +177,27 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
       return 0;
     }
     case WM_KEYDOWN: {
-        switch (wParam) {
-          case 67: {
-            if (GetKeyState(VK_SHIFT) & KEY_SHIFTED) {
-              RunNotepad();
-            }
-            return 0;
+      switch (wParam) {
+        case 67: {
+          if (GetKeyState(VK_SHIFT) & KEY_SHIFTED) {
+            RunNotepad();
           }
-          case 81: {
-            if (GetKeyState(VK_CONTROL) & KEY_SHIFTED) {
-              DestroyWindow(hwnd);
-            }
-            return 0;
-          }
-          case VK_RETURN: {
-            game.ChangeBgColor();
-            return 0;
-          }
-          case VK_ESCAPE: {
+          return 0;
+        }
+        case 81: {
+          if (GetKeyState(VK_CONTROL) & KEY_SHIFTED) {
             DestroyWindow(hwnd);
-            return 0;
-          } 
+          }
+          return 0;
+        }
+        case VK_RETURN: {
+          game.ChangeBgColor();
+          return 0;
+        }
+        case VK_ESCAPE: {
+          DestroyWindow(hwnd);
+          return 0;
+        }
       }
       return 0;
     }
@@ -236,7 +237,8 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
   return DefWindowProc(hwnd, message, wParam, lParam);
 }
 
-// ---------------------------------------------------------- main start -------------------------------------------------------
+// ---------------------------------------------------------- main start
+// -------------------------------------------------------
 
 int main(int argc, char** argv) {
   srand(time(NULL));
@@ -252,7 +254,7 @@ int main(int argc, char** argv) {
   winCl.lpfnWndProc = WindowProcedure;
   winCl.hbrBackground = CreateSolidBrush(COLORREF(RGB(0, 0, 0)));
   if (!RegisterClass(&winCl)) return 1;
-  
+
   game.Create(argc, argv, hThisInstance);
   game.Show();
 
@@ -275,7 +277,8 @@ int main(int argc, char** argv) {
   return 0;
 }
 
-// ---------------------------------------------------------- main end --------------------------------------------------------
+// ---------------------------------------------------------- main end
+// --------------------------------------------------------
 
 void COLOR::ToUChar(UINT8* buffer) {
   buffer[0] = red;
@@ -292,8 +295,7 @@ void COLOR::FromUChar(UINT8* buffer) {
 COLORREF COLOR::GetColorref() { return COLORREF(RGB(red, green, blue)); }
 
 COLORREF COLOR::GetContrast() {
-  if (((red * 299 + green * 587 + blue * 114) / 1000) >
-      128) {
+  if (((red * 299 + green * 587 + blue * 114) / 1000) > 128) {
     return COLORREF(RGB(0, 0, 0));
   }
   return COLORREF(RGB(255, 255, 255));
@@ -305,13 +307,13 @@ void COLOR::SetRGB(UINT8 r, UINT8 g, UINT8 b) {
   blue = b;
 }
 
-bool FIELD::TryOpenFileMapping() { 
+bool FIELD::TryOpenFileMapping() {
   hMapFile = OpenFileMapping(PAGE_READWRITE, FALSE, szSharedMemoryName);
   if (hMapFile == NULL) {
     return false;
   }
   CloseHandle(hMapFile);
-  return true; 
+  return true;
 }
 
 bool FIELD::Create(UINT s) {
@@ -402,8 +404,7 @@ GAME_TURN FIELD::GetTurn() {
 
 UINT FIELD::GetSize() { return size; }
 
-GAME::~GAME() {
-}
+GAME::~GAME() {}
 
 bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
   if (!(wmSynch = RegisterWindowMessage((LPCWSTR) "WM_TTTSYNCH"))) return 0;
@@ -428,13 +429,13 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
                    WS_OVERLAPPEDWINDOW, /* default window */
                    CW_USEDEFAULT,       /* Windows decides the position */
                    CW_USEDEFAULT, /* where the window ends up on the screen */
-                   res.width,  /* The programs width */
-                   res.height,     /* and height in pixels */
+                   res.width,     /* The programs width */
+                   res.height,    /* and height in pixels */
                    HWND_DESKTOP,  /* The window is a child-window to desktop */
                    NULL,          /* No menu */
                    hThisInstance, /* Program Instance handler */
                    NULL           /* No Window Creation data */
-  );
+      );
 
   HBRUSH hBrush = CreateSolidBrush(bgColor.GetColorref());
   hBrush = (HBRUSH)(DWORD_PTR)SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND,
@@ -446,7 +447,7 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
   return 1;
 }
 
-bool GAME::Close() { 
+bool GAME::Close() {
   if (!WriteToFile()) {
     return 0;
   }
@@ -474,24 +475,27 @@ void GAME::ChangeBgColor() {
   InvalidateRect(hwnd, NULL, TRUE);
 }
 
-bool GAME::TryMakeTurn(UINT x, UINT y, GAME_TURN turn) { 
+bool GAME::TryMakeTurn(UINT x, UINT y, GAME_TURN turn) {
   if (turn == field.GetTurn()) {
     field.SetCellValue(x, y, turn);
+    if (!SetWinTitle(turn)) {
+      return false;
+    }
     InvalidateRect(hwnd, NULL, TRUE);
     SendSynchMessage(x, y);
     switch (field.CheckGameField(x, y)) {
       case NOUGHTS: {
-        MessageBox(hwnd, szNPWinnerMessage, L"Game over", MB_OK);
+        MessageBox(hwnd, szNPWinnerMessage, _T("Game over"), MB_OK);
         Close();
         break;
       }
       case CROSSES: {
-        MessageBox(hwnd, szCPWinnerMessage, L"Game over", MB_OK);
+        MessageBox(hwnd, szCPWinnerMessage, _T("Game over"), MB_OK);
         Close();
         break;
       }
       case 3: {
-        MessageBox(hwnd, L"Draw!", L"Game over", MB_OK);
+        MessageBox(hwnd, _T("Draw!"), _T("Game over"), MB_OK);
         Close();
         break;
       }
@@ -505,17 +509,17 @@ void GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
   InvalidateRect(hwnd, NULL, TRUE);
   switch (field.CheckGameField(wParam, lParam)) {
     case NOUGHTS: {
-      MessageBox(hwnd, szNPWinnerMessage, L"Game over", MB_OK);
+      MessageBox(hwnd, szNPWinnerMessage, _T("Game over"), MB_OK);
       Close();
       break;
     }
     case CROSSES: {
-      MessageBox(hwnd, szCPWinnerMessage, L"Game over", MB_OK);
+      MessageBox(hwnd, szCPWinnerMessage, _T("Game over"), MB_OK);
       Close();
       break;
     }
     case 3: {
-      MessageBox(hwnd, L"Draw!", L"Game over", MB_OK);
+      MessageBox(hwnd, _T("Draw!"), _T("Game over"), MB_OK);
       Close();
       break;
     }
@@ -548,7 +552,8 @@ void GAME::Render() {
 
   hPen = CreatePen(PS_SOLID, NULL, bgColor.GetContrast());
   hDefaultPen = (HPEN)SelectObject(hdc, hPen);
-  HBRUSH hDefaultBrush = (HBRUSH)SelectObject(hdc, CreateSolidBrush(bgColor.GetColorref()));
+  HBRUSH hDefaultBrush =
+      (HBRUSH)SelectObject(hdc, CreateSolidBrush(bgColor.GetColorref()));
 
   UINT szEllipseOffsetX = szOffsetX / 10;
   UINT szEllipseOffsetY = szOffsetY / 10;
@@ -680,6 +685,13 @@ void GAME::ChangeLinesColorDown() {
   InvalidateRect(hwnd, NULL, TRUE);
 }
 
+bool GAME::SetWinTitle(GAME_TURN turn) {
+  if (!SetWindowText(hwnd, (turn != NOUGHTS) ? szNoughtsTurnTitle : szCrossesTurnTitle)) {
+    return false;
+  }
+  return true;
+}
+
 RESOLUTION GAME::GetRes() { return res; }
 
 UINT GAME::GetSize() { return field.GetSize(); }
@@ -688,7 +700,8 @@ UINT GAME::GetSynchMessage() { return wmSynch; }
 
 UINT GAME::ReadFromFile() {
   UINT size = DEFAULT_SIZE;
-  HANDLE hFile = CreateFile(szCfgName, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
+  HANDLE hFile =
+      CreateFile(szCfgName, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (hFile == INVALID_HANDLE_VALUE) {
     return size;
@@ -714,10 +727,10 @@ UINT GAME::ReadFromFile() {
   delete[] buffer;
   CloseHandle(hFile);
 
-  return size; 
+  return size;
 }
 
-bool GAME::WriteToFile() { 
+bool GAME::WriteToFile() {
   HANDLE hFile =
       CreateFile(szCfgName, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -745,7 +758,7 @@ bool GAME::WriteToFile() {
   delete[] buffer;
   CloseHandle(hFile);
 
-  return true; 
+  return true;
 }
 
 void GAME::DefineColorChangeState() {
