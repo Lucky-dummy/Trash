@@ -1,3 +1,11 @@
+/* 
+ * Dependencies:
+ *  gdi32
+ *  (kernel32)
+ *  user32
+ *  (comctl32)
+ *  msimg32.lib
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -5,24 +13,27 @@
 #include <time.h>
 #include <windows.h>
 #include <windowsx.h>
+#include <string>
+#include <wingdi.h>
 
 #include <iostream>
 
 constexpr auto KEY_SHIFTED = 0x8000;
 constexpr auto KEY_TOGGLED = 0x0001;
 constexpr UINT BYTES_TO_READ = 18u;
-constexpr UINT COLOR_CHANGE_OFFSET = 15u;
-constexpr UINT MAX_MATRIX_SIZE = 32u;
-constexpr UINT DEFAULT_SIZE = 3u;
+constexpr UINT8 COLOR_CHANGE_OFFSET = 15u;
+constexpr UINT MAX_MATRIX_SIZE = 15u;
+constexpr UINT DEFAULT_MATRIX_SIZE = 3u;
+constexpr LPDWORD RENDER_THREAD_ID = 0;
 
 const TCHAR szWinClass[] = _T("Win32SampleApp");
 const TCHAR szCfgName[] = _T("TicTacToe.cfg");
 const TCHAR szSharedMemoryName[] = _T("Local\\TicTacToeFileMapping");
 const TCHAR szNPWinnerMessage[] = _T("Noughts won!");
 const TCHAR szCPWinnerMessage[] = _T("Crosses won!");
-const TCHAR szNoughtsTurnTitle[] = _T("TicTacTie: Noughts turn");
-const TCHAR szCrossesTurnTitle[] = _T("TicTacTie: Crosses turn");
-const TCHAR szWinName[] = _T("TicTacTie: Noughts turn");
+const TCHAR szNoughtsTurnTitle[] = _T("TicTacToe: Noughts turn");
+const TCHAR szCrossesTurnTitle[] = _T("TicTacToe: Crosses turn");
+const TCHAR szWinName[] = _T("TicTacToe: Noughts turn");
 
 void RunNotepad(void) {
   STARTUPINFO sInfo;
@@ -49,16 +60,35 @@ void UCharToUInt(UINT8* buffer, UINT& uint) {
   uint = (uint << 8) + buffer[3];
 }
 
+int GetThreadPriority(int d) {
+  switch (d) {
+    case 1:
+      return THREAD_PRIORITY_IDLE;
+    case 2:
+      return THREAD_PRIORITY_LOWEST;
+    case 3:
+      return THREAD_PRIORITY_BELOW_NORMAL;
+    case 5:
+      return THREAD_PRIORITY_ABOVE_NORMAL;
+    case 6:
+      return THREAD_PRIORITY_HIGHEST;
+    case 7:
+      return THREAD_PRIORITY_TIME_CRITICAL;
+    default: 
+      return THREAD_PRIORITY_NORMAL;
+  }
+}
+
 enum COLOR_CHANGE_STATE {
-  GREEN_UP,
-  RED_DOWN,
-  BLUE_UP,
-  GREEN_DOWN,
-  RED_UP,
-  BLUE_DOWN
+  GREEN_UP = 0,
+  RED_DOWN = 1,
+  BLUE_UP = 2,
+  GREEN_DOWN = 3,
+  RED_UP = 4,
+  BLUE_DOWN = 5
 };
 
-enum GAME_TURN { NOUGHTS = 1u, CROSSES = 2u };
+enum GAME_TURN { NOUGHTS = 1u, CROSSES = 2u, DRAW = 3u };
 
 class COLOR {
  public:
@@ -70,6 +100,15 @@ class COLOR {
     green = lhs.green;
     blue = lhs.blue;
     return *this;
+  }
+  COLOR operator-(const COLOR& clr) const {
+    return COLOR(red - clr.red, green - clr.green, blue - clr.blue);
+  }
+  COLOR operator*(const UINT& m) const {
+    return COLOR(red * m, green * m, blue * m);
+  }
+  COLOR operator/(const UINT& d) const {
+    return COLOR(red * d, green * d, blue * d);
   }
 
   void ToUChar(UINT8* buffer);
@@ -88,7 +127,7 @@ class COLOR {
 class FIELD {
  public:
   FIELD()
-      : size(DEFAULT_SIZE), cellsFiled(0), hMapFile(nullptr), pBuf(nullptr) {}
+      : size(DEFAULT_MATRIX_SIZE), cellsFiled(0u), hMapFile(nullptr), pBuf(nullptr) {}
   ~FIELD() {
     UnmapViewOfFile(pBuf);
     CloseHandle(hMapFile);
@@ -106,7 +145,7 @@ class FIELD {
   UINT GetSize();
 
  private:
-  UINT size, cellsFiled;
+  UINT size, cellsFiled, turnsCount;
   HANDLE hMapFile;
   LPTSTR pBuf;
 };
@@ -125,8 +164,11 @@ class GAME {
         field(FIELD()),
         bgColor(0, 0, 255),
         linesColor(255, 0, 0),
+        bgColorChange(RED_UP),
         linesColorChange(GREEN_UP),
-        wmSynch(0) {}
+        wmSynch(0),
+        backHDC(0),
+        backBMP() {}
   ~GAME();
 
   bool Create(int argc, char** argv, HINSTANCE hThisInstance);
@@ -134,10 +176,12 @@ class GAME {
 
   void Show();
 
+  void Display();
+  void Redraw();
   void Resize();
   void ChangeBgColor();
   bool TryMakeTurn(UINT x, UINT y, GAME_TURN turn);
-  void ProccessSynchMessage(WPARAM wParam, LPARAM lParam);
+  bool ProccessSynchMessage(WPARAM wParam, LPARAM lParam);
   void Render();
   void ChangeLinesColorUp();
   void ChangeLinesColorDown();
@@ -150,7 +194,9 @@ class GAME {
   UINT ReadFromFile();
   bool WriteToFile();
 
-  void DefineColorChangeState();
+  void DefineColorChangeState(COLOR& color, COLOR_CHANGE_STATE& colorState);
+  void ChangeColorUp(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 colorOffset);
+  void ChangeColorDown(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 colorOffset);
 
   void SendSynchMessage(UINT x, UINT y);
   bool SetWinTitle(GAME_TURN);
@@ -159,21 +205,32 @@ class GAME {
   UINT wmSynch;
   FIELD field;
   COLOR bgColor, linesColor;
-  COLOR_CHANGE_STATE linesColorChange;
+  COLOR_CHANGE_STATE bgColorChange, linesColorChange;
   HWND hwnd;
+  HDC backHDC;
+  HBITMAP backBMP;
+  RECT clientRect;
 };
 
 GAME game;
+HANDLE hRenderMutex;
+HANDLE hRenderThread;
+bool isRenderThreadActive;
 
 LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
                                  LPARAM lParam) {
   switch (message) {
     case WM_DESTROY: {
+      if (!game.Close()) {
+        return 1;
+      }
       PostQuitMessage(0);
       return 0;
     }
     case WM_SIZE: {
+      WaitForSingleObject(hRenderMutex, INFINITE);
       game.Resize();
+      ReleaseMutex(hRenderMutex);
       return 0;
     }
     case WM_KEYDOWN: {
@@ -191,17 +248,27 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
           return 0;
         }
         case VK_RETURN: {
+          WaitForSingleObject(hRenderMutex, INFINITE);
           game.ChangeBgColor();
+          ReleaseMutex(hRenderMutex);
           return 0;
         }
         case VK_ESCAPE: {
           DestroyWindow(hwnd);
           return 0;
         }
+        default: {
+          if (wParam > 48 && wParam < 56) {
+            if (!SetThreadPriority(hRenderThread, GetThreadPriority(wParam - 48))) {
+              _tprintf(_T("Thread priority changing error!\n"));
+            }
+          }
+        }
       }
       return 0;
     }
     case WM_LBUTTONUP: {
+      WaitForSingleObject(hRenderMutex, INFINITE);
       RESOLUTION coords = game.GetRes();
       coords.width = GET_X_LPARAM(lParam) / (coords.width / game.GetSize());
       coords.height = GET_Y_LPARAM(lParam) / (coords.height / game.GetSize());
@@ -209,6 +276,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
       return 0;
     }
     case WM_RBUTTONUP: {
+      WaitForSingleObject(hRenderMutex, INFINITE);
       RESOLUTION coords = game.GetRes();
       coords.width = GET_X_LPARAM(lParam) / (coords.width / game.GetSize());
       coords.height = GET_Y_LPARAM(lParam) / (coords.height / game.GetSize());
@@ -216,15 +284,17 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
       return 0;
     }
     case WM_PAINT: {
-      game.Render();
+      game.Display();
       return 0;
     }
     case WM_MOUSEWHEEL: {
+      WaitForSingleObject(hRenderMutex, INFINITE);
       if ((int16_t)HIWORD(wParam) > 0) {
         game.ChangeLinesColorUp();
       } else {
         game.ChangeLinesColorDown();
       }
+      ReleaseMutex(hRenderMutex);
       return 0;
     }
     default: {
@@ -237,8 +307,12 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
   return DefWindowProc(hwnd, message, wParam, lParam);
 }
 
-// ---------------------------------------------------------- main start
-// -------------------------------------------------------
+DWORD WINAPI RenderThreadFunction(LPVOID) {
+  game.Render();
+  return TRUE;
+}
+
+// ---------------------------------------------------- main start ------------------------------------------------------------
 
 int main(int argc, char** argv) {
   srand(time(NULL));
@@ -258,6 +332,10 @@ int main(int argc, char** argv) {
   game.Create(argc, argv, hThisInstance);
   game.Show();
 
+  isRenderThreadActive = true;
+  hRenderMutex = CreateMutex(NULL, FALSE, _T("RenderMutex"));
+  hRenderThread = CreateThread(NULL, 0, RenderThreadFunction, NULL, 0, RENDER_THREAD_ID);
+
   while ((bMessageOk = GetMessage(&message, NULL, 0, 0)) != 0) {
     if (bMessageOk == -1) {
       puts(
@@ -269,16 +347,14 @@ int main(int argc, char** argv) {
     DispatchMessage(&message);
   }
 
-  if (!game.Close()) {
-    return 1;
-  }
+  CloseHandle(hRenderThread);
+  CloseHandle(hRenderMutex);
   UnregisterClass(szWinClass, hThisInstance);
 
   return 0;
 }
 
-// ---------------------------------------------------------- main end
-// --------------------------------------------------------
+// ---------------------------------------------------------- main end ------------------------------------------------------------
 
 void COLOR::ToUChar(UINT8* buffer) {
   buffer[0] = red;
@@ -317,7 +393,9 @@ bool FIELD::TryOpenFileMapping() {
 }
 
 bool FIELD::Create(UINT s) {
-  size = s;
+  if (s <= MAX_MATRIX_SIZE) {
+    size = s;
+  }
   hMapFile =
       CreateFileMapping(INVALID_HANDLE_VALUE,  // use paging file
                         NULL,                  // default security
@@ -388,14 +466,10 @@ UINT8 FIELD::CheckGameField(UINT x, UINT y) {
       return value;
     }
   }
-  for (UINT i = 0; i < size; i++) {
-    for (UINT j = 0; j < size; j++) {
-      if (pBuf[i * size + j] == 0) {
-        return 0;
-      }
-    }
+  if (cellsFiled == size * size) {
+    return DRAW;
   }
-  return 3;
+  return 0;
 }
 
 GAME_TURN FIELD::GetTurn() {
@@ -417,11 +491,6 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
   if (!field.Create(size)) {
     return 0;
   }
-  if (isFirst) {
-    if (!WriteToFile()) {
-      return 0;
-    }
-  }
 
   hwnd =
       CreateWindow(szWinClass,          /* Classname */
@@ -440,73 +509,117 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
   HBRUSH hBrush = CreateSolidBrush(bgColor.GetColorref());
   hBrush = (HBRUSH)(DWORD_PTR)SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND,
                                               (LONG)hBrush);
+  
+  if (isFirst) {
+    if (!WriteToFile()) {
+      return 0;
+    }
+  }
+  GetClientRect(hwnd, &clientRect);
+  HDC hdc = GetDC(hwnd);
+  HBITMAP backBMP = CreateCompatibleBitmap(hdc, res.width, res.height);
+  backHDC = CreateCompatibleDC(hdc);
+  ReleaseDC(hwnd, hdc);
+  SelectObject(backHDC, backBMP);
+  DeleteObject(backBMP);
+
   DeleteObject(hBrush);
-  DefineColorChangeState();
-  InvalidateRect(hwnd, NULL, TRUE);
+  DefineColorChangeState(linesColor, linesColorChange);
+  DefineColorChangeState(bgColor, bgColorChange);
 
   return 1;
 }
 
 bool GAME::Close() {
-  if (!WriteToFile()) {
-    return 0;
+  isRenderThreadActive = false;
+  WaitForSingleObject(hRenderMutex, INFINITE);
+  if (hwnd != NULL) {
+    if (!WriteToFile()) {
+      return 0;
+    }
+    DeleteDC(backHDC);
+    DestroyWindow(hwnd);
   }
-  DestroyWindow(hwnd);
+  ReleaseMutex(hRenderMutex);
   return 1;
 }
 
-void GAME::Show() { ShowWindow(hwnd, SW_SHOW); }
+void GAME::Show() {
+  ShowWindow(hwnd, SW_SHOW);
+#ifdef NDEBUG // RELEASE
+  ShowWindow(GetConsoleWindow(), SW_HIDE);
+#else // DEBUG
+  ShowWindow(GetConsoleWindow(), SW_SHOW);
+#endif
+}
+
+void GAME::Display() {
+  PAINTSTRUCT ps;
+  HDC hdc = BeginPaint(hwnd, &ps);
+  BitBlt(hdc, 0, 0, res.width, res.height, backHDC, 0, 0, SRCCOPY);
+  EndPaint(hwnd, &ps);
+}
+
+void GAME::Redraw() { RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE); }
 
 void GAME::Resize() {
-  RECT rect;
-  GetClientRect(hwnd, &rect);
-  res.width = rect.right;
-  res.height = rect.bottom;
-  InvalidateRect(hwnd, NULL, TRUE);
+  GetClientRect(hwnd, &clientRect);
+  res.width = clientRect.right;
+  res.height = clientRect.bottom;
+
+  HDC hdc;
+  GetClientRect(hwnd, &clientRect);
+  hdc = GetDC(hwnd);
+  backHDC = CreateCompatibleDC(hdc);
+  backBMP = CreateCompatibleBitmap(hdc, clientRect.right, clientRect.bottom);
+  HGDIOBJ oldBMP = SelectObject(backHDC, backBMP);
+  ReleaseDC(hwnd, hdc);
 }
 
 void GAME::ChangeBgColor() {
-  bgColor.SetRGB((uint8_t)(rand() % 256), (uint8_t)(rand() % 256),
-                 (uint8_t)(rand() % 256));
+  bgColorChange = (COLOR_CHANGE_STATE)(rand() % 6);
+  UINT8 clr = (rand() % 255) / 5 * 5;
+  switch (bgColorChange) {
+    case GREEN_UP:
+      bgColor = COLOR(255, clr, 0);
+      break;
+    case RED_DOWN:
+      bgColor = COLOR(clr, 255, 0);
+      break;
+    case BLUE_UP:
+      bgColor = COLOR(0, 255, clr);
+      break;
+    case GREEN_DOWN:
+      bgColor = COLOR(0, clr, 255);
+      break;
+    case RED_UP:
+      bgColor = COLOR(clr, 0, 255);
+      break;
+    case BLUE_DOWN:
+      bgColor = COLOR(255, 0, clr);
+      break;
+  }
   HBRUSH hBrush = CreateSolidBrush(bgColor.GetColorref());
   hBrush = (HBRUSH)(DWORD_PTR)SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND,
                                               (LONG)hBrush);
   DeleteObject(hBrush);
-  InvalidateRect(hwnd, NULL, TRUE);
 }
 
 bool GAME::TryMakeTurn(UINT x, UINT y, GAME_TURN turn) {
   if (turn == field.GetTurn()) {
     field.SetCellValue(x, y, turn);
-    if (!SetWinTitle(turn)) {
-      return false;
-    }
-    InvalidateRect(hwnd, NULL, TRUE);
     SendSynchMessage(x, y);
-    switch (field.CheckGameField(x, y)) {
-      case NOUGHTS: {
-        MessageBox(hwnd, szNPWinnerMessage, _T("Game over"), MB_OK);
-        Close();
-        break;
-      }
-      case CROSSES: {
-        MessageBox(hwnd, szCPWinnerMessage, _T("Game over"), MB_OK);
-        Close();
-        break;
-      }
-      case 3: {
-        MessageBox(hwnd, _T("Draw!"), _T("Game over"), MB_OK);
-        Close();
-        break;
-      }
-    }
     return true;
   }
+  ReleaseMutex(hRenderMutex);
   return false;
 }
 
-void GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
-  InvalidateRect(hwnd, NULL, TRUE);
+bool GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
+  if (!SetWinTitle(field.GetTurn())) {
+    return false;
+  }
+  ReleaseMutex(hRenderMutex);
   switch (field.CheckGameField(wParam, lParam)) {
     case NOUGHTS: {
       MessageBox(hwnd, szNPWinnerMessage, _T("Game over"), MB_OK);
@@ -518,175 +631,116 @@ void GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
       Close();
       break;
     }
-    case 3: {
+    case DRAW: {
       MessageBox(hwnd, _T("Draw!"), _T("Game over"), MB_OK);
       Close();
       break;
     }
   }
+  return true;
+}
+
+USHORT ToUS(UINT8 color) {
+  return (USHORT)(UINT)(color * 65535 / 255);
 }
 
 void GAME::Render() {
-  PAINTSTRUCT strPaint;
   HDC hdc;
-  hdc = BeginPaint(hwnd, &strPaint);
-  if (!hdc) {
-    puts("BeginPaint error!");
-    return;
-  }
+  GetClientRect(hwnd, &clientRect);
+  hdc = GetDC(hwnd);
+  backHDC = CreateCompatibleDC(hdc);
+  backBMP = CreateCompatibleBitmap(hdc, clientRect.right, clientRect.bottom);
+  HGDIOBJ oldBMP = SelectObject(backHDC, backBMP);
+  ReleaseDC(hwnd, hdc);
 
-  HPEN hPen = CreatePen(PS_SOLID, NULL, linesColor.GetColorref());
-  HPEN hDefaultPen = (HPEN)SelectObject(hdc, hPen);
+  RECT rect = {0, 0, 30, 15};
 
-  UINT szOffsetX = res.width / field.GetSize();
-  UINT szOffsetY = res.height / field.GetSize();
-  for (int i = 1; i < field.GetSize(); i++) {
-    MoveToEx(hdc, szOffsetX * i, 0, NULL);
-    LineTo(hdc, szOffsetX * i, res.height);
-    MoveToEx(hdc, 0, szOffsetY * i, NULL);
-    LineTo(hdc, res.width, szOffsetY * i);
-  }
+  while (isRenderThreadActive) {
+    WaitForSingleObject(hRenderMutex, INFINITE);
 
-  hPen = (HPEN)SelectObject(hdc, hDefaultPen);
-  DeleteObject(hPen);
+    ChangeColorUp(bgColor, bgColorChange, 5u);
 
-  hPen = CreatePen(PS_SOLID, NULL, bgColor.GetContrast());
-  hDefaultPen = (HPEN)SelectObject(hdc, hPen);
-  HBRUSH hDefaultBrush =
-      (HBRUSH)SelectObject(hdc, CreateSolidBrush(bgColor.GetColorref()));
+    TRIVERTEX vertex[2] = {{0, 0, ToUS(bgColor.red), ToUS(bgColor.green),
+                            ToUS(bgColor.blue), 0x0000},
+        {res.width, res.height, ToUS(255 ^ bgColor.red),
+         ToUS(255 ^ bgColor.green), ToUS(255 ^ bgColor.blue), 0x0000}};
+    GRADIENT_RECT gRect;
+    gRect.UpperLeft = 0;
+    gRect.LowerRight = 1;
 
-  UINT szEllipseOffsetX = szOffsetX / 10;
-  UINT szEllipseOffsetY = szOffsetY / 10;
-  for (UINT i = 0; i < field.GetSize(); i++) {
-    for (UINT j = 0; j < field.GetSize(); j++) {
-      switch (field.GetCellValue(i, j)) {
-        case NOUGHTS: {
-          Ellipse(hdc, szEllipseOffsetX + szOffsetX * i,
-                  szEllipseOffsetY + szOffsetY * j,
-                  szOffsetX * (i + 1) - szEllipseOffsetX,
-                  szOffsetY * (j + 1) - szEllipseOffsetY);
-          break;
-        }
-        case CROSSES: {
-          MoveToEx(hdc, szEllipseOffsetX + szOffsetX * i,
-                   szEllipseOffsetY + szOffsetY * j, NULL);
-          LineTo(hdc, szOffsetX * (i + 1) - szEllipseOffsetX,
-                 szOffsetY * (j + 1) - szEllipseOffsetY);
-          MoveToEx(hdc, szOffsetX * (i + 1) - szEllipseOffsetX,
-                   szEllipseOffsetY + szOffsetY * j, NULL);
-          LineTo(hdc, szEllipseOffsetX + szOffsetX * i,
-                 szOffsetY * (j + 1) - szEllipseOffsetY);
-          break;
+    GradientFill(backHDC, vertex, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
+        
+    HPEN hPen = CreatePen(PS_SOLID, NULL, linesColor.GetColorref());
+    HPEN hDefaultPen = (HPEN)SelectObject(backHDC, hPen);
+
+    UINT szOffsetX = res.width / field.GetSize();
+    UINT szOffsetY = res.height / field.GetSize();
+    for (UINT i = 1; i < field.GetSize(); i++) {
+      MoveToEx(backHDC, szOffsetX * i, 0, NULL);
+      LineTo(backHDC, szOffsetX * i, res.height);
+      MoveToEx(backHDC, 0, szOffsetY * i, NULL);
+      LineTo(backHDC, res.width, szOffsetY * i);
+    }
+
+    hPen = (HPEN)SelectObject(backHDC, hDefaultPen);
+    DeleteObject(hPen);
+
+    hPen = CreatePen(PS_SOLID, NULL, bgColor.GetContrast());
+    hDefaultPen = (HPEN)SelectObject(backHDC, hPen);
+    HBRUSH hDefaultBrush =
+        (HBRUSH)SelectObject(backHDC, GetStockObject(NULL_BRUSH));
+
+    UINT szEllipseOffsetX = szOffsetX / 10;
+    UINT szEllipseOffsetY = szOffsetY / 10;
+    for (UINT i = 0; i < field.GetSize(); i++) {
+      for (UINT j = 0; j < field.GetSize(); j++) {
+        switch (field.GetCellValue(i, j)) {
+          case NOUGHTS: {
+            Ellipse(backHDC, szEllipseOffsetX + szOffsetX * i,
+                    szEllipseOffsetY + szOffsetY * j,
+                    szOffsetX * (i + 1) - szEllipseOffsetX,
+                    szOffsetY * (j + 1) - szEllipseOffsetY);
+            break;
+          }
+          case CROSSES: {
+            MoveToEx(backHDC, szEllipseOffsetX + szOffsetX * i,
+                     szEllipseOffsetY + szOffsetY * j, NULL);
+            LineTo(backHDC, szOffsetX * (i + 1) - szEllipseOffsetX,
+                   szOffsetY * (j + 1) - szEllipseOffsetY);
+            MoveToEx(backHDC, szOffsetX * (i + 1) - szEllipseOffsetX,
+                     szEllipseOffsetY + szOffsetY * j, NULL);
+            LineTo(backHDC, szEllipseOffsetX + szOffsetX * i,
+                   szOffsetY * (j + 1) - szEllipseOffsetY);
+            break;
+          }
         }
       }
     }
+
+    hDefaultBrush = (HBRUSH)SelectObject(backHDC, hDefaultBrush);
+    DeleteObject(hDefaultBrush);
+    hPen = (HPEN)SelectObject(backHDC, hDefaultPen);
+    DeleteObject(hPen);
+
+    ReleaseMutex(hRenderMutex);
+    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE);
+
+    Sleep(1000 / 60);
   }
 
-  hDefaultBrush = (HBRUSH)SelectObject(hdc, hDefaultBrush);
-  DeleteObject(hDefaultBrush);
-  hPen = (HPEN)SelectObject(hdc, hDefaultPen);
-  DeleteObject(hPen);
-  EndPaint(hwnd, &strPaint);
+  SelectObject(backHDC, oldBMP);
+  DeleteObject(backBMP);
+  DeleteDC(backHDC);
 }
 
-void GAME::ChangeLinesColorUp() {
-  switch (linesColorChange) {
-    case GREEN_UP:
-      linesColor.green += COLOR_CHANGE_OFFSET;
-      if ((linesColor.green) == 255) {
-        linesColorChange = RED_DOWN;
-      }
-      break;
-    case RED_DOWN:
-      linesColor.red -= COLOR_CHANGE_OFFSET;
-      if ((linesColor.red) == 0) {
-        linesColorChange = BLUE_UP;
-      }
-      break;
-    case BLUE_UP:
-      linesColor.blue += COLOR_CHANGE_OFFSET;
-      if ((linesColor.blue) == 255) {
-        linesColorChange = GREEN_DOWN;
-      }
-      break;
-    case GREEN_DOWN:
-      linesColor.green -= COLOR_CHANGE_OFFSET;
-      if ((linesColor.green) == 0) {
-        linesColorChange = RED_UP;
-      }
-      break;
-    case RED_UP:
-      linesColor.red += COLOR_CHANGE_OFFSET;
-      if ((linesColor.red) == 255) {
-        linesColorChange = BLUE_DOWN;
-      }
-      break;
-    case BLUE_DOWN:
-      linesColor.blue -= COLOR_CHANGE_OFFSET;
-      if ((linesColor.blue) == 0) {
-        linesColorChange = GREEN_UP;
-      }
-      break;
-  }
-  InvalidateRect(hwnd, NULL, TRUE);
-}
+void GAME::ChangeLinesColorUp() { ChangeColorUp(linesColor, linesColorChange, COLOR_CHANGE_OFFSET); }
 
 void GAME::ChangeLinesColorDown() {
-  switch (linesColorChange) {
-    case GREEN_UP:
-      if (linesColor.green > 0) {
-        linesColor.green -= COLOR_CHANGE_OFFSET;
-      } else {
-        linesColor.blue += COLOR_CHANGE_OFFSET;
-        linesColorChange = BLUE_DOWN;
-      }
-      break;
-    case RED_DOWN:
-      if (linesColor.red < 255) {
-        linesColor.red += COLOR_CHANGE_OFFSET;
-      } else {
-        linesColor.green -= COLOR_CHANGE_OFFSET;
-        linesColorChange = GREEN_UP;
-      }
-      break;
-    case BLUE_UP:
-      if (linesColor.blue > 0) {
-        linesColor.blue -= COLOR_CHANGE_OFFSET;
-      } else {
-        linesColor.red += COLOR_CHANGE_OFFSET;
-        linesColorChange = RED_DOWN;
-      }
-      break;
-    case GREEN_DOWN:
-      if (linesColor.green < 255) {
-        linesColor.green += COLOR_CHANGE_OFFSET;
-      } else {
-        linesColor.blue -= COLOR_CHANGE_OFFSET;
-        linesColorChange = BLUE_UP;
-      }
-      break;
-    case RED_UP:
-      if (linesColor.red > 0) {
-        linesColor.red -= COLOR_CHANGE_OFFSET;
-      } else {
-        linesColor.green += COLOR_CHANGE_OFFSET;
-        linesColorChange = GREEN_DOWN;
-      }
-      break;
-    case BLUE_DOWN:
-      if (linesColor.blue < 255) {
-        linesColor.blue += COLOR_CHANGE_OFFSET;
-      } else {
-        linesColor.red -= COLOR_CHANGE_OFFSET;
-        linesColorChange = RED_UP;
-      }
-      break;
-  }
-  InvalidateRect(hwnd, NULL, TRUE);
+  ChangeColorDown(linesColor, linesColorChange, COLOR_CHANGE_OFFSET);
 }
 
 bool GAME::SetWinTitle(GAME_TURN turn) {
-  if (!SetWindowText(hwnd, (turn != NOUGHTS) ? szNoughtsTurnTitle : szCrossesTurnTitle)) {
+  if (!SetWindowText(hwnd, (turn == NOUGHTS) ? szNoughtsTurnTitle : szCrossesTurnTitle)) {
     return false;
   }
   return true;
@@ -699,7 +753,7 @@ UINT GAME::GetSize() { return field.GetSize(); }
 UINT GAME::GetSynchMessage() { return wmSynch; }
 
 UINT GAME::ReadFromFile() {
-  UINT size = DEFAULT_SIZE;
+  UINT size = DEFAULT_MATRIX_SIZE;
   HANDLE hFile =
       CreateFile(szCfgName, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -735,6 +789,7 @@ bool GAME::WriteToFile() {
       CreateFile(szCfgName, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
   if (hFile == INVALID_HANDLE_VALUE) {
+    _tprintf(TEXT("CreateFile error (%d)\n"), GetLastError());
     return 1;
   }
 
@@ -743,9 +798,12 @@ bool GAME::WriteToFile() {
   UINT8* buffer = new UINT8[BYTES_TO_READ];
   DWORD dwBytesToWrite = BYTES_TO_READ;
 
+  RECT rect;
+  GetWindowRect(hwnd, &rect);
+
   UIntToUChar(field.GetSize(), buffer);
-  UIntToUChar(res.width, buffer + 4);
-  UIntToUChar(res.height, buffer + 8);
+  UIntToUChar(rect.right - rect.left, buffer + 4);
+  UIntToUChar(rect.bottom - rect.top, buffer + 8);
   bgColor.ToUChar(buffer + 12);
   linesColor.ToUChar(buffer + 15);
 
@@ -761,19 +819,113 @@ bool GAME::WriteToFile() {
   return true;
 }
 
-void GAME::DefineColorChangeState() {
-  if (linesColor.red == 255 && linesColor.green < 255) {
-    linesColorChange = GREEN_UP;
-  } else if (linesColor.red == 255 && linesColor.blue > 0) {
-    linesColorChange = BLUE_DOWN;
-  } else if (linesColor.green == 255 && linesColor.blue < 255) {
-    linesColorChange = BLUE_UP;
-  } else if (linesColor.green == 255 && linesColor.red > 0) {
-    linesColorChange = RED_DOWN;
-  } else if (linesColor.blue == 255 && linesColor.red < 255) {
-    linesColorChange = RED_UP;
+void GAME::DefineColorChangeState(COLOR& color, COLOR_CHANGE_STATE& colorState) {
+  if (color.red == 255 && color.green < 255) {
+    colorState = GREEN_UP;
+  } else if (color.red == 255 && color.blue > 0) {
+    colorState = BLUE_DOWN;
+  } else if (color.green == 255 && color.blue < 255) {
+    colorState = BLUE_UP;
+  } else if (color.green == 255 && color.red > 0) {
+    colorState = RED_DOWN;
+  } else if (color.blue == 255 && color.red < 255) {
+    colorState = RED_UP;
   } else {
-    linesColorChange = GREEN_DOWN;
+    colorState = GREEN_DOWN;
+  }
+}
+
+void GAME::ChangeColorUp(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 colorOffset) {
+  switch (colorState) {
+    case GREEN_UP:
+      color.green += colorOffset;
+      if ((color.green) == 255) {
+        colorState = RED_DOWN;
+      }
+      break;
+    case RED_DOWN:
+      color.red -= colorOffset;
+      if ((color.red) == 0) {
+        colorState = BLUE_UP;
+      }
+      break;
+    case BLUE_UP:
+      color.blue += colorOffset;
+      if ((color.blue) == 255) {
+        colorState = GREEN_DOWN;
+      }
+      break;
+    case GREEN_DOWN:
+      color.green -= colorOffset;
+      if ((color.green) == 0) {
+        colorState = RED_UP;
+      }
+      break;
+    case RED_UP:
+      color.red += colorOffset;
+      if ((color.red) == 255) {
+        colorState = BLUE_DOWN;
+      }
+      break;
+    case BLUE_DOWN:
+      color.blue -= colorOffset;
+      if ((color.blue) == 0) {
+        colorState = GREEN_UP;
+      }
+      break;
+  }
+}
+
+void GAME::ChangeColorDown(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 colorOffset) {
+  switch (colorState) {
+    case GREEN_UP:
+      if (color.green > 0) {
+        color.green -= colorOffset;
+      } else {
+        color.blue += colorOffset;
+        colorState = BLUE_DOWN;
+      }
+      break;
+    case RED_DOWN:
+      if (color.red < 255) {
+        color.red += colorOffset;
+      } else {
+        color.green -= colorOffset;
+        colorState = GREEN_UP;
+      }
+      break;
+    case BLUE_UP:
+      if (color.blue > 0) {
+        color.blue -= colorOffset;
+      } else {
+        color.red += colorOffset;
+        colorState = RED_DOWN;
+      }
+      break;
+    case GREEN_DOWN:
+      if (color.green < 255) {
+        color.green += colorOffset;
+      } else {
+        color.blue -= colorOffset;
+        colorState = BLUE_UP;
+      }
+      break;
+    case RED_UP:
+      if (color.red > 0) {
+        color.red -= colorOffset;
+      } else {
+        color.green += colorOffset;
+        colorState = GREEN_DOWN;
+      }
+      break;
+    case BLUE_DOWN:
+      if (color.blue < 255) {
+        color.blue += colorOffset;
+      } else {
+        color.red -= colorOffset;
+        colorState = RED_UP;
+      }
+      break;
   }
 }
 
