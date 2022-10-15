@@ -1,11 +1,3 @@
-/* 
- * Dependencies:
- *  gdi32
- *  (kernel32)
- *  user32
- *  (comctl32)
- *  msimg32.lib
- */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,21 +86,14 @@ class COLOR {
  public:
   COLOR() : red(0), green(0), blue(0) {}
   COLOR(UINT8 r, UINT8 g, UINT8 b) : red(r), green(g), blue(b) {}
+  COLOR(COLORREF ref)
+      : red((ref >> 16) & 0xFF), green((ref >> 8) & 0xFF), blue(ref & 0xFF) {}
 
   COLOR& operator=(const COLOR& lhs) {
     red = lhs.red;
     green = lhs.green;
     blue = lhs.blue;
     return *this;
-  }
-  COLOR operator-(const COLOR& clr) const {
-    return COLOR(red - clr.red, green - clr.green, blue - clr.blue);
-  }
-  COLOR operator*(const UINT& m) const {
-    return COLOR(red * m, green * m, blue * m);
-  }
-  COLOR operator/(const UINT& d) const {
-    return COLOR(red * d, green * d, blue * d);
   }
 
   void ToUChar(UINT8* buffer);
@@ -117,12 +102,34 @@ class COLOR {
   COLORREF GetColorref();
   COLORREF GetContrast();
 
+  COLOR Lerp(COLOR toColor, UINT t, UINT p);
+
+  COLOR operator+(const COLOR& other);
+  COLOR operator-(const COLOR& other);
+  COLOR operator*(const UINT& mult);
+  COLOR operator*(const float& mult);
+  COLOR operator/(const UINT& div);
+
   void SetRGB(UINT8 r, UINT8 g, UINT8 b);
 
   UINT8 red;
   UINT8 green;
   UINT8 blue;
 };
+
+void GradientFill(HDC hdc, const RECT* lprc, COLOR leftClr, COLOR rightClr, COLOR topClr, COLOR bottomClr) {
+  UINT width = lprc->right - lprc->left;
+  UINT height = lprc->bottom - lprc->top;
+  UINT middle = (width + height) / 2;
+
+  for (UINT x = lprc->left; x < lprc->right; ++x) {
+    COLOR xColor = leftClr.Lerp(rightClr, x - lprc->left, width).GetColorref();
+    for (UINT y = lprc->top; y < lprc->bottom; ++y) {
+      COLOR yColor = topClr.Lerp(bottomClr, y - lprc->top, height).GetColorref();
+      SetPixel(hdc, x, y, xColor.Lerp(yColor, (x - lprc->left + y - lprc->top) / 2, middle).GetColorref());
+    }
+  }
+}
 
 class FIELD {
  public:
@@ -164,7 +171,6 @@ class GAME {
         field(FIELD()),
         bgColor(0, 0, 255),
         linesColor(255, 0, 0),
-        bgColorChange(RED_UP),
         linesColorChange(GREEN_UP),
         wmSynch(0),
         backHDC(0),
@@ -205,7 +211,7 @@ class GAME {
   UINT wmSynch;
   FIELD field;
   COLOR bgColor, linesColor;
-  COLOR_CHANGE_STATE bgColorChange, linesColorChange;
+  COLOR_CHANGE_STATE linesColorChange;
   HWND hwnd;
   HDC backHDC;
   HBITMAP backBMP;
@@ -333,7 +339,7 @@ int main(int argc, char** argv) {
   game.Show();
 
   isRenderThreadActive = true;
-  hRenderMutex = CreateMutex(NULL, FALSE, _T("RenderMutex"));
+  hRenderMutex = CreateMutex(NULL, FALSE, NULL);
   hRenderThread = CreateThread(NULL, 0, RenderThreadFunction, NULL, 0, RENDER_THREAD_ID);
 
   while ((bMessageOk = GetMessage(&message, NULL, 0, 0)) != 0) {
@@ -368,13 +374,47 @@ void COLOR::FromUChar(UINT8* buffer) {
   blue = buffer[2];
 }
 
-COLORREF COLOR::GetColorref() { return COLORREF(RGB(red, green, blue)); }
+COLORREF COLOR::GetColorref() {
+    return COLORREF(RGB(red, green, blue));
+}
 
 COLORREF COLOR::GetContrast() {
   if (((red * 299 + green * 587 + blue * 114) / 1000) > 128) {
     return COLORREF(RGB(0, 0, 0));
   }
   return COLORREF(RGB(255, 255, 255));
+}
+
+COLOR COLOR::Lerp(COLOR toColor, UINT t, UINT p) {
+  COLOR temp(*this);
+  temp.red += (toColor.red - this->red) * t / p;
+  temp.green += (toColor.green - this->green) * t / p;
+  temp.blue += (toColor.blue - this->blue) * t / p;
+  return temp;
+}
+
+COLOR COLOR::operator+(const COLOR& other) { 
+  return COLOR(this->red + other.red, this->green + other.green, this->blue + other.blue);
+}
+
+COLOR COLOR::operator-(const COLOR& other) {
+  return COLOR(this->red - other.red, this->green - other.green, this->blue - other.blue);
+}
+
+COLOR COLOR::operator*(const UINT& mult) {
+  return COLOR(this->red * mult, this->green * mult, this->blue * mult);
+}
+
+COLOR COLOR::operator*(const float& mult) {
+  COLOR temp(*this);
+  temp.red = (UINT)((FLOAT)(temp.red * mult));
+  temp.green = (UINT)((FLOAT)(temp.green * mult));
+  temp.blue = (UINT)((FLOAT)(temp.blue * mult));
+  return temp;
+}
+
+COLOR COLOR::operator/(const UINT& div) {
+  return COLOR(this->red / div, this->green / div, this->blue / div);
 }
 
 void COLOR::SetRGB(UINT8 r, UINT8 g, UINT8 b) {
@@ -525,7 +565,6 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
 
   DeleteObject(hBrush);
   DefineColorChangeState(linesColor, linesColorChange);
-  DefineColorChangeState(bgColor, bgColorChange);
 
   return 1;
 }
@@ -577,7 +616,7 @@ void GAME::Resize() {
 }
 
 void GAME::ChangeBgColor() {
-  bgColorChange = (COLOR_CHANGE_STATE)(rand() % 6);
+  /*bgColorChange = (COLOR_CHANGE_STATE)(rand() % 6);
   UINT8 clr = (rand() % 255) / 5 * 5;
   switch (bgColorChange) {
     case GREEN_UP:
@@ -598,7 +637,8 @@ void GAME::ChangeBgColor() {
     case BLUE_DOWN:
       bgColor = COLOR(255, 0, clr);
       break;
-  }
+  }*/
+  bgColor = COLOR(rand() % 255, rand() % 255, rand() % 255);
   HBRUSH hBrush = CreateSolidBrush(bgColor.GetColorref());
   hBrush = (HBRUSH)(DWORD_PTR)SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND,
                                               (LONG)hBrush);
@@ -653,22 +693,52 @@ void GAME::Render() {
   HGDIOBJ oldBMP = SelectObject(backHDC, backBMP);
   ReleaseDC(hwnd, hdc);
 
-  RECT rect = {0, 0, 30, 15};
+  struct Carriege {
+    Carriege() : pos(0), way(true) {}
+    Carriege operator++() {
+      switch (way) {
+        case true: {
+          if (++pos == 100) {
+            way = false;
+          }
+          return *this;
+        }
+        case false: {
+          if (--pos == 0) {
+            way = true;
+          }
+          return *this;
+        }
+      }
+    }
+
+    operator UINT() const { return pos; }
+
+    UINT pos;
+    bool way;
+  } t;
 
   while (isRenderThreadActive) {
     WaitForSingleObject(hRenderMutex, INFINITE);
 
-    ChangeColorUp(bgColor, bgColorChange, 5u);
-
-    TRIVERTEX vertex[2] = {{0, 0, ToUS(bgColor.red), ToUS(bgColor.green),
-                            ToUS(bgColor.blue), 0x0000},
-        {res.width, res.height, ToUS(255 ^ bgColor.red),
-         ToUS(255 ^ bgColor.green), ToUS(255 ^ bgColor.blue), 0x0000}};
+    ++t;
+    COLOR beetweenClr = bgColor * 0.67f;
+    TRIVERTEX vertexesT[2] = {
+        {0, 0, ToUS(bgColor.red), ToUS(bgColor.green), ToUS(bgColor.blue),
+         0x0000},
+        {res.width, res.height * t / 100, ToUS(beetweenClr.red),
+         ToUS(beetweenClr.green), ToUS(beetweenClr.blue), 0x0000}};
+    TRIVERTEX vertexesB[2] = {
+        {0, res.height * t / 100, ToUS(beetweenClr.red),
+         ToUS(beetweenClr.green), ToUS(beetweenClr.blue), 0x0000},
+        {res.width, res.height, ToUS(bgColor.red), ToUS(bgColor.green),
+         ToUS(bgColor.blue), 0x0000}};
     GRADIENT_RECT gRect;
     gRect.UpperLeft = 0;
     gRect.LowerRight = 1;
 
-    GradientFill(backHDC, vertex, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
+    GradientFill(backHDC, vertexesT, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
+    GradientFill(backHDC, vertexesB, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
         
     HPEN hPen = CreatePen(PS_SOLID, NULL, linesColor.GetColorref());
     HPEN hDefaultPen = (HPEN)SelectObject(backHDC, hPen);
