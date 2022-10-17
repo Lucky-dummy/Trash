@@ -1,3 +1,11 @@
+/*
+ * Dependencies:
+ *  gdi32
+ *  (kernel32)
+ *  user32
+ *  (comctl32)
+ *  msimg32.lib
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -5,10 +13,10 @@
 #include <time.h>
 #include <windows.h>
 #include <windowsx.h>
-#include <string>
 #include <wingdi.h>
 
 #include <iostream>
+#include <string>
 
 constexpr auto KEY_SHIFTED = 0x8000;
 constexpr auto KEY_TOGGLED = 0x0001;
@@ -66,7 +74,7 @@ int GetThreadPriority(int d) {
       return THREAD_PRIORITY_HIGHEST;
     case 7:
       return THREAD_PRIORITY_TIME_CRITICAL;
-    default: 
+    default:
       return THREAD_PRIORITY_NORMAL;
   }
 }
@@ -102,13 +110,7 @@ class COLOR {
   COLORREF GetColorref();
   COLORREF GetContrast();
 
-  COLOR Lerp(COLOR toColor, UINT t, UINT p);
-
-  COLOR operator+(const COLOR& other);
-  COLOR operator-(const COLOR& other);
-  COLOR operator*(const UINT& mult);
   COLOR operator*(const float& mult);
-  COLOR operator/(const UINT& div);
 
   void SetRGB(UINT8 r, UINT8 g, UINT8 b);
 
@@ -117,24 +119,13 @@ class COLOR {
   UINT8 blue;
 };
 
-void GradientFill(HDC hdc, const RECT* lprc, COLOR leftClr, COLOR rightClr, COLOR topClr, COLOR bottomClr) {
-  UINT width = lprc->right - lprc->left;
-  UINT height = lprc->bottom - lprc->top;
-  UINT middle = (width + height) / 2;
-
-  for (UINT x = lprc->left; x < lprc->right; ++x) {
-    COLOR xColor = leftClr.Lerp(rightClr, x - lprc->left, width).GetColorref();
-    for (UINT y = lprc->top; y < lprc->bottom; ++y) {
-      COLOR yColor = topClr.Lerp(bottomClr, y - lprc->top, height).GetColorref();
-      SetPixel(hdc, x, y, xColor.Lerp(yColor, (x - lprc->left + y - lprc->top) / 2, middle).GetColorref());
-    }
-  }
-}
-
 class FIELD {
  public:
   FIELD()
-      : size(DEFAULT_MATRIX_SIZE), cellsFiled(0u), hMapFile(nullptr), pBuf(nullptr) {}
+      : size(DEFAULT_MATRIX_SIZE),
+        cellsFiled(0u),
+        hMapFile(nullptr),
+        pBuf(nullptr) {}
   ~FIELD() {
     UnmapViewOfFile(pBuf);
     CloseHandle(hMapFile);
@@ -201,8 +192,10 @@ class GAME {
   bool WriteToFile();
 
   void DefineColorChangeState(COLOR& color, COLOR_CHANGE_STATE& colorState);
-  void ChangeColorUp(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 colorOffset);
-  void ChangeColorDown(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 colorOffset);
+  void ChangeColorUp(COLOR& color, COLOR_CHANGE_STATE& colorState,
+                     UINT8 colorOffset);
+  void ChangeColorDown(COLOR& color, COLOR_CHANGE_STATE& colorState,
+                       UINT8 colorOffset);
 
   void SendSynchMessage(UINT x, UINT y);
   bool SetWinTitle(GAME_TURN);
@@ -265,7 +258,8 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
         }
         default: {
           if (wParam > 48 && wParam < 56) {
-            if (!SetThreadPriority(hRenderThread, GetThreadPriority(wParam - 48))) {
+            if (!SetThreadPriority(hRenderThread,
+                                   GetThreadPriority(wParam - 48))) {
               _tprintf(_T("Thread priority changing error!\n"));
             }
           }
@@ -318,7 +312,8 @@ DWORD WINAPI RenderThreadFunction(LPVOID) {
   return TRUE;
 }
 
-// ---------------------------------------------------- main start ------------------------------------------------------------
+// ---------------------------------------------------- main start
+// ------------------------------------------------------------
 
 int main(int argc, char** argv) {
   srand(time(NULL));
@@ -340,7 +335,8 @@ int main(int argc, char** argv) {
 
   isRenderThreadActive = true;
   hRenderMutex = CreateMutex(NULL, FALSE, NULL);
-  hRenderThread = CreateThread(NULL, 0, RenderThreadFunction, NULL, 0, RENDER_THREAD_ID);
+  hRenderThread =
+      CreateThread(NULL, 0, RenderThreadFunction, NULL, 0, RENDER_THREAD_ID);
 
   while ((bMessageOk = GetMessage(&message, NULL, 0, 0)) != 0) {
     if (bMessageOk == -1) {
@@ -360,7 +356,8 @@ int main(int argc, char** argv) {
   return 0;
 }
 
-// ---------------------------------------------------------- main end ------------------------------------------------------------
+// ---------------------------------------------------------- main end
+// ------------------------------------------------------------
 
 void COLOR::ToUChar(UINT8* buffer) {
   buffer[0] = red;
@@ -374,9 +371,7 @@ void COLOR::FromUChar(UINT8* buffer) {
   blue = buffer[2];
 }
 
-COLORREF COLOR::GetColorref() {
-    return COLORREF(RGB(red, green, blue));
-}
+COLORREF COLOR::GetColorref() { return COLORREF(RGB(red, green, blue)); }
 
 COLORREF COLOR::GetContrast() {
   if (((red * 299 + green * 587 + blue * 114) / 1000) > 128) {
@@ -385,36 +380,12 @@ COLORREF COLOR::GetContrast() {
   return COLORREF(RGB(255, 255, 255));
 }
 
-COLOR COLOR::Lerp(COLOR toColor, UINT t, UINT p) {
-  COLOR temp(*this);
-  temp.red += (toColor.red - this->red) * t / p;
-  temp.green += (toColor.green - this->green) * t / p;
-  temp.blue += (toColor.blue - this->blue) * t / p;
-  return temp;
-}
-
-COLOR COLOR::operator+(const COLOR& other) { 
-  return COLOR(this->red + other.red, this->green + other.green, this->blue + other.blue);
-}
-
-COLOR COLOR::operator-(const COLOR& other) {
-  return COLOR(this->red - other.red, this->green - other.green, this->blue - other.blue);
-}
-
-COLOR COLOR::operator*(const UINT& mult) {
-  return COLOR(this->red * mult, this->green * mult, this->blue * mult);
-}
-
 COLOR COLOR::operator*(const float& mult) {
   COLOR temp(*this);
   temp.red = (UINT)((FLOAT)(temp.red * mult));
   temp.green = (UINT)((FLOAT)(temp.green * mult));
   temp.blue = (UINT)((FLOAT)(temp.blue * mult));
   return temp;
-}
-
-COLOR COLOR::operator/(const UINT& div) {
-  return COLOR(this->red / div, this->green / div, this->blue / div);
 }
 
 void COLOR::SetRGB(UINT8 r, UINT8 g, UINT8 b) {
@@ -549,7 +520,7 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
   HBRUSH hBrush = CreateSolidBrush(bgColor.GetColorref());
   hBrush = (HBRUSH)(DWORD_PTR)SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND,
                                               (LONG)hBrush);
-  
+
   if (isFirst) {
     if (!WriteToFile()) {
       return 0;
@@ -585,9 +556,9 @@ bool GAME::Close() {
 
 void GAME::Show() {
   ShowWindow(hwnd, SW_SHOW);
-#ifdef NDEBUG // RELEASE
+#ifdef NDEBUG  // RELEASE
   ShowWindow(GetConsoleWindow(), SW_HIDE);
-#else // DEBUG
+#else  // DEBUG
   ShowWindow(GetConsoleWindow(), SW_SHOW);
 #endif
 }
@@ -616,28 +587,6 @@ void GAME::Resize() {
 }
 
 void GAME::ChangeBgColor() {
-  /*bgColorChange = (COLOR_CHANGE_STATE)(rand() % 6);
-  UINT8 clr = (rand() % 255) / 5 * 5;
-  switch (bgColorChange) {
-    case GREEN_UP:
-      bgColor = COLOR(255, clr, 0);
-      break;
-    case RED_DOWN:
-      bgColor = COLOR(clr, 255, 0);
-      break;
-    case BLUE_UP:
-      bgColor = COLOR(0, 255, clr);
-      break;
-    case GREEN_DOWN:
-      bgColor = COLOR(0, clr, 255);
-      break;
-    case RED_UP:
-      bgColor = COLOR(clr, 0, 255);
-      break;
-    case BLUE_DOWN:
-      bgColor = COLOR(255, 0, clr);
-      break;
-  }*/
   bgColor = COLOR(rand() % 255, rand() % 255, rand() % 255);
   HBRUSH hBrush = CreateSolidBrush(bgColor.GetColorref());
   hBrush = (HBRUSH)(DWORD_PTR)SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND,
@@ -680,9 +629,7 @@ bool GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
   return true;
 }
 
-USHORT ToUS(UINT8 color) {
-  return (USHORT)(UINT)(color * 65535 / 255);
-}
+USHORT ToUS(UINT8 color) { return (USHORT)(UINT)(color * 65535 / 255); }
 
 void GAME::Render() {
   HDC hdc;
@@ -739,7 +686,7 @@ void GAME::Render() {
 
     GradientFill(backHDC, vertexesT, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
     GradientFill(backHDC, vertexesB, 2, &gRect, 1, GRADIENT_FILL_RECT_V);
-        
+
     HPEN hPen = CreatePen(PS_SOLID, NULL, linesColor.GetColorref());
     HPEN hDefaultPen = (HPEN)SelectObject(backHDC, hPen);
 
@@ -803,14 +750,17 @@ void GAME::Render() {
   DeleteDC(backHDC);
 }
 
-void GAME::ChangeLinesColorUp() { ChangeColorUp(linesColor, linesColorChange, COLOR_CHANGE_OFFSET); }
+void GAME::ChangeLinesColorUp() {
+  ChangeColorUp(linesColor, linesColorChange, COLOR_CHANGE_OFFSET);
+}
 
 void GAME::ChangeLinesColorDown() {
   ChangeColorDown(linesColor, linesColorChange, COLOR_CHANGE_OFFSET);
 }
 
 bool GAME::SetWinTitle(GAME_TURN turn) {
-  if (!SetWindowText(hwnd, (turn == NOUGHTS) ? szNoughtsTurnTitle : szCrossesTurnTitle)) {
+  if (!SetWindowText(
+          hwnd, (turn == NOUGHTS) ? szNoughtsTurnTitle : szCrossesTurnTitle)) {
     return false;
   }
   return true;
@@ -889,7 +839,8 @@ bool GAME::WriteToFile() {
   return true;
 }
 
-void GAME::DefineColorChangeState(COLOR& color, COLOR_CHANGE_STATE& colorState) {
+void GAME::DefineColorChangeState(COLOR& color,
+                                  COLOR_CHANGE_STATE& colorState) {
   if (color.red == 255 && color.green < 255) {
     colorState = GREEN_UP;
   } else if (color.red == 255 && color.blue > 0) {
@@ -905,7 +856,8 @@ void GAME::DefineColorChangeState(COLOR& color, COLOR_CHANGE_STATE& colorState) 
   }
 }
 
-void GAME::ChangeColorUp(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 colorOffset) {
+void GAME::ChangeColorUp(COLOR& color, COLOR_CHANGE_STATE& colorState,
+                         UINT8 colorOffset) {
   switch (colorState) {
     case GREEN_UP:
       color.green += colorOffset;
@@ -946,7 +898,8 @@ void GAME::ChangeColorUp(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 col
   }
 }
 
-void GAME::ChangeColorDown(COLOR& color, COLOR_CHANGE_STATE& colorState, UINT8 colorOffset) {
+void GAME::ChangeColorDown(COLOR& color, COLOR_CHANGE_STATE& colorState,
+                           UINT8 colorOffset) {
   switch (colorState) {
     case GREEN_UP:
       if (color.green > 0) {
