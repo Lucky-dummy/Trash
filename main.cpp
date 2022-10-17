@@ -41,7 +41,7 @@ void RunNotepad(void) {
 
   ZeroMemory(&sInfo, sizeof(STARTUPINFO));
 
-  puts("Starting Notepad...");
+  _tprintf(_T("Starting Notepad..."));
   CreateProcess(_T("C:\\Windows\\Notepad.exe"), NULL, NULL, NULL, FALSE, 0,
                 NULL, NULL, &sInfo, &pInfo);
 }
@@ -258,8 +258,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
         }
         default: {
           if (wParam > 48 && wParam < 56) {
-            if (!SetThreadPriority(hRenderThread,
-                                   GetThreadPriority(wParam))) {
+            if (!SetThreadPriority(hRenderThread, GetThreadPriority(wParam))) {
               _tprintf(_T("Thread priority changing error!\n"));
             }
           }
@@ -340,9 +339,9 @@ int main(int argc, char** argv) {
 
   while ((bMessageOk = GetMessage(&message, NULL, 0, 0)) != 0) {
     if (bMessageOk == -1) {
-      puts(
-          "Suddenly, GetMessage failed! You can call GetLastError() to see "
-          "what happend");
+      _tprintf(
+          _T("Suddenly, GetMessage failed! You can call GetLastError() to see "
+             "what happend"));
       break;
     }
     TranslateMessage(&message);
@@ -431,7 +430,9 @@ void FIELD::SetCellValue(UINT x, UINT y, UINT8 value) {
   }
 }
 
-UINT8 FIELD::GetCellValue(UINT x, UINT y) { return static_cast<UINT8>(pBuf[x * size + y]); }
+UINT8 FIELD::GetCellValue(UINT x, UINT y) {
+  return static_cast<UINT8>(pBuf[x * size + y]);
+}
 
 UINT8 FIELD::CheckGameField(WPARAM x, LPARAM y) {
   UINT8 value = static_cast<UINT8>(pBuf[x * size + y]);
@@ -667,7 +668,7 @@ void GAME::Render() {
 
   while (isRenderThreadActive) {
     WaitForSingleObject(hRenderMutex, INFINITE);
-    
+
     ++t;
     COLOR beetweenClr = bgColor * 0.67f;
     TRIVERTEX vertexesT[2] = {
@@ -784,7 +785,7 @@ UINT GAME::ReadFromFile() {
   UINT8* buffer = new UINT8[BYTES_TO_READ];
   DWORD dwBytesRead;
   if (!ReadFile(hFile, buffer, BYTES_TO_READ, &dwBytesRead, NULL)) {
-    puts("ReadFile error!");
+    _tprintf(_T("ReadFile error!"));
     return size;
   }
 
@@ -830,7 +831,7 @@ bool GAME::WriteToFile() {
   DWORD dwBytesWritten;
   WriteFile(hFile, buffer, dwBytesToWrite, &dwBytesWritten, NULL);
   if (dwBytesToWrite != dwBytesWritten) {
-    puts("WriteFile error!");
+    _tprintf(_T("WriteFile error!"));
     return false;
   }
   delete[] buffer;
