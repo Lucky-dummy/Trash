@@ -60,19 +60,19 @@ void UCharToUInt(UINT8* buffer, UINT& uint) {
   uint = (uint << 8) + buffer[3];
 }
 
-int GetThreadPriority(int d) {
+int GetThreadPriority(WPARAM d) {
   switch (d) {
-    case 1:
+    case 0x31:
       return THREAD_PRIORITY_IDLE;
-    case 2:
+    case 0x32:
       return THREAD_PRIORITY_LOWEST;
-    case 3:
+    case 0x33:
       return THREAD_PRIORITY_BELOW_NORMAL;
-    case 5:
+    case 0x35:
       return THREAD_PRIORITY_ABOVE_NORMAL;
-    case 6:
+    case 0x36:
       return THREAD_PRIORITY_HIGHEST;
-    case 7:
+    case 0x37:
       return THREAD_PRIORITY_TIME_CRITICAL;
     default:
       return THREAD_PRIORITY_NORMAL;
@@ -137,7 +137,7 @@ class FIELD {
   void SetCellValue(UINT x, UINT y, UINT8 value);
   UINT8 GetCellValue(UINT x, UINT y);
 
-  UINT8 CheckGameField(UINT x, UINT y);
+  UINT8 CheckGameField(WPARAM x, LPARAM y);
 
   GAME_TURN GetTurn();
   UINT GetSize();
@@ -259,7 +259,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
         default: {
           if (wParam > 48 && wParam < 56) {
             if (!SetThreadPriority(hRenderThread,
-                                   GetThreadPriority(wParam - 48))) {
+                                   GetThreadPriority(wParam))) {
               _tprintf(_T("Thread priority changing error!\n"));
             }
           }
@@ -431,10 +431,10 @@ void FIELD::SetCellValue(UINT x, UINT y, UINT8 value) {
   }
 }
 
-UINT8 FIELD::GetCellValue(UINT x, UINT y) { return pBuf[x * size + y]; }
+UINT8 FIELD::GetCellValue(UINT x, UINT y) { return static_cast<UINT8>(pBuf[x * size + y]); }
 
-UINT8 FIELD::CheckGameField(UINT x, UINT y) {
-  UINT8 value = pBuf[x * size + y];
+UINT8 FIELD::CheckGameField(WPARAM x, LPARAM y) {
+  UINT8 value = static_cast<UINT8>(pBuf[x * size + y]);
   bool flag = true;
   for (UINT i = 0; i < size; i++) {
     if (pBuf[x * size + i] != value) {
@@ -667,7 +667,7 @@ void GAME::Render() {
 
   while (isRenderThreadActive) {
     WaitForSingleObject(hRenderMutex, INFINITE);
-
+    
     ++t;
     COLOR beetweenClr = bgColor * 0.67f;
     TRIVERTEX vertexesT[2] = {
