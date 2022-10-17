@@ -174,7 +174,6 @@ class GAME {
   void Show();
 
   void Display();
-  void Redraw();
   void Resize();
   void ChangeBgColor();
   bool TryMakeTurn(UINT x, UINT y, GAME_TURN turn);
@@ -311,9 +310,6 @@ DWORD WINAPI RenderThreadFunction(LPVOID) {
   return TRUE;
 }
 
-// ---------------------------------------------------- main start
-// ------------------------------------------------------------
-
 int main(int argc, char** argv) {
   srand(time(NULL));
 
@@ -339,9 +335,8 @@ int main(int argc, char** argv) {
 
   while ((bMessageOk = GetMessage(&message, NULL, 0, 0)) != 0) {
     if (bMessageOk == -1) {
-      _tprintf(
-          _T("Suddenly, GetMessage failed! You can call GetLastError() to see "
-             "what happend"));
+      _tprintf(_T("Suddenly, GetMessage failed! Last error code is %d"),
+               GetLastError());
       break;
     }
     TranslateMessage(&message);
@@ -354,9 +349,6 @@ int main(int argc, char** argv) {
 
   return 0;
 }
-
-// ---------------------------------------------------------- main end
-// ------------------------------------------------------------
 
 void COLOR::ToUChar(UINT8* buffer) {
   buffer[0] = red;
@@ -527,13 +519,13 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
       return 0;
     }
   }
-  GetClientRect(hwnd, &clientRect);
+  /*GetClientRect(hwnd, &clientRect);
   HDC hdc = GetDC(hwnd);
-  HBITMAP backBMP = CreateCompatibleBitmap(hdc, res.width, res.height);
+  backBMP = CreateCompatibleBitmap(hdc, res.width, res.height);
   backHDC = CreateCompatibleDC(hdc);
   ReleaseDC(hwnd, hdc);
   SelectObject(backHDC, backBMP);
-  DeleteObject(backBMP);
+  DeleteObject(backBMP);*/
 
   DeleteObject(hBrush);
   DefineColorChangeState(linesColor, linesColorChange);
@@ -544,11 +536,11 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
 bool GAME::Close() {
   isRenderThreadActive = false;
   WaitForSingleObject(hRenderMutex, INFINITE);
+  DeleteDC(backHDC);
   if (hwnd != NULL) {
     if (!WriteToFile()) {
       return 0;
     }
-    DeleteDC(backHDC);
     DestroyWindow(hwnd);
   }
   ReleaseMutex(hRenderMutex);
@@ -571,8 +563,6 @@ void GAME::Display() {
   EndPaint(hwnd, &ps);
 }
 
-void GAME::Redraw() { RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE); }
-
 void GAME::Resize() {
   GetClientRect(hwnd, &clientRect);
   res.width = clientRect.right;
@@ -583,7 +573,8 @@ void GAME::Resize() {
   hdc = GetDC(hwnd);
   backHDC = CreateCompatibleDC(hdc);
   backBMP = CreateCompatibleBitmap(hdc, clientRect.right, clientRect.bottom);
-  HGDIOBJ oldBMP = SelectObject(backHDC, backBMP);
+  HBITMAP oldBMP = (HBITMAP)SelectObject(backHDC, backBMP);
+  DeleteObject(oldBMP);
   ReleaseDC(hwnd, hdc);
 }
 
@@ -613,20 +604,21 @@ bool GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
   switch (field.CheckGameField(wParam, lParam)) {
     case NOUGHTS: {
       MessageBox(hwnd, szNPWinnerMessage, _T("Game over"), MB_OK);
-      Close();
       break;
     }
     case CROSSES: {
       MessageBox(hwnd, szCPWinnerMessage, _T("Game over"), MB_OK);
-      Close();
       break;
     }
     case DRAW: {
       MessageBox(hwnd, _T("Draw!"), _T("Game over"), MB_OK);
-      Close();
       break;
     }
+    default: {
+      return true;
+    }
   }
+  DestroyWindow(hwnd);
   return true;
 }
 
@@ -639,6 +631,7 @@ void GAME::Render() {
   backHDC = CreateCompatibleDC(hdc);
   backBMP = CreateCompatibleBitmap(hdc, clientRect.right, clientRect.bottom);
   HGDIOBJ oldBMP = SelectObject(backHDC, backBMP);
+  DeleteObject(oldBMP);
   ReleaseDC(hwnd, hdc);
 
   struct Carriege {
