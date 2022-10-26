@@ -34,6 +34,7 @@ const TCHAR szCPWinnerMessage[] = _T("Crosses won!");
 const TCHAR szNoughtsTurnTitle[] = _T("TicTacToe: Noughts turn");
 const TCHAR szCrossesTurnTitle[] = _T("TicTacToe: Crosses turn");
 const TCHAR szWinName[] = _T("TicTacToe: Noughts turn");
+const TCHAR szSemaphoreName[] = _T("RenderThreadSemaphore");
 
 void RunNotepad(void) {
   STARTUPINFO sInfo;
@@ -60,7 +61,7 @@ void UCharToUInt(UINT8* buffer, UINT& uint) {
   uint = (uint << 8) + buffer[3];
 }
 
-int GetThreadPriority(WPARAM d) {
+int DefineThreadPriority(WPARAM d) {
   switch (d) {
     case 0x31:
       return THREAD_PRIORITY_IDLE;
@@ -211,24 +212,34 @@ class GAME {
 };
 
 GAME game;
-HANDLE hRenderMutex;
+HANDLE hRenderSemaphore;
 HANDLE hRenderThread;
 bool isRenderThreadActive;
+bool isRenderThreadPaused;
+
+inline void LockRenderThread() {
+  if (!isRenderThreadPaused) {
+    WaitForSingleObject(hRenderSemaphore, INFINITE);
+  }
+}
+
+inline void UnlockRenderThread() {
+  if (!isRenderThreadPaused) {
+    ReleaseSemaphore(hRenderSemaphore, 1, NULL);
+  }
+}
 
 LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
                                  LPARAM lParam) {
   switch (message) {
     case WM_DESTROY: {
-      if (!game.Close()) {
-        return 1;
-      }
       PostQuitMessage(0);
       return 0;
     }
     case WM_SIZE: {
-      WaitForSingleObject(hRenderMutex, INFINITE);
+      LockRenderThread();
       game.Resize();
-      ReleaseMutex(hRenderMutex);
+      UnlockRenderThread();
       return 0;
     }
     case WM_KEYDOWN: {
@@ -241,23 +252,36 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
         }
         case 81: {
           if (GetKeyState(VK_CONTROL) & KEY_SHIFTED) {
-            DestroyWindow(hwnd);
+            if (!game.Close()) {
+              return 1;
+            }
           }
           return 0;
         }
         case VK_RETURN: {
-          WaitForSingleObject(hRenderMutex, INFINITE);
+          LockRenderThread();
           game.ChangeBgColor();
-          ReleaseMutex(hRenderMutex);
+          UnlockRenderThread();
           return 0;
         }
         case VK_ESCAPE: {
-          DestroyWindow(hwnd);
+          if (!game.Close()) {
+            return 1;
+          }
+          return 0;
+        }
+        case VK_SPACE: {
+          if (isRenderThreadPaused) {
+            ReleaseSemaphore(hRenderSemaphore, 1, NULL);
+          } else {
+            WaitForSingleObject(hRenderSemaphore, INFINITE);
+          }
+          isRenderThreadPaused = !isRenderThreadPaused;
           return 0;
         }
         default: {
           if (wParam > 48 && wParam < 56) {
-            if (!SetThreadPriority(hRenderThread, GetThreadPriority(wParam))) {
+            if (!SetThreadPriority(hRenderThread, DefineThreadPriority(wParam))) {
               _tprintf(_T("Thread priority changing error!\n"));
             }
           }
@@ -266,7 +290,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
       return 0;
     }
     case WM_LBUTTONUP: {
-      WaitForSingleObject(hRenderMutex, INFINITE);
+      LockRenderThread();
       RESOLUTION coords = game.GetRes();
       coords.width = GET_X_LPARAM(lParam) / (coords.width / game.GetSize());
       coords.height = GET_Y_LPARAM(lParam) / (coords.height / game.GetSize());
@@ -274,7 +298,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
       return 0;
     }
     case WM_RBUTTONUP: {
-      WaitForSingleObject(hRenderMutex, INFINITE);
+      LockRenderThread();
       RESOLUTION coords = game.GetRes();
       coords.width = GET_X_LPARAM(lParam) / (coords.width / game.GetSize());
       coords.height = GET_Y_LPARAM(lParam) / (coords.height / game.GetSize());
@@ -286,13 +310,13 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
       return 0;
     }
     case WM_MOUSEWHEEL: {
-      WaitForSingleObject(hRenderMutex, INFINITE);
+      LockRenderThread();
       if ((int16_t)HIWORD(wParam) > 0) {
         game.ChangeLinesColorUp();
       } else {
         game.ChangeLinesColorDown();
       }
-      ReleaseMutex(hRenderMutex);
+      UnlockRenderThread();
       return 0;
     }
     default: {
@@ -329,7 +353,8 @@ int main(int argc, char** argv) {
   game.Show();
 
   isRenderThreadActive = true;
-  hRenderMutex = CreateMutex(NULL, FALSE, NULL);
+  isRenderThreadPaused = false;
+  hRenderSemaphore = CreateSemaphore(NULL, 1, 1, szSemaphoreName);
   hRenderThread =
       CreateThread(NULL, 0, RenderThreadFunction, NULL, 0, RENDER_THREAD_ID);
 
@@ -344,7 +369,7 @@ int main(int argc, char** argv) {
   }
 
   CloseHandle(hRenderThread);
-  CloseHandle(hRenderMutex);
+  CloseHandle(hRenderSemaphore);
   UnregisterClass(szWinClass, hThisInstance);
 
   return 0;
@@ -535,7 +560,7 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
 
 bool GAME::Close() {
   isRenderThreadActive = false;
-  WaitForSingleObject(hRenderMutex, INFINITE);
+  LockRenderThread();
   DeleteDC(backHDC);
   if (hwnd != NULL) {
     if (!WriteToFile()) {
@@ -543,7 +568,7 @@ bool GAME::Close() {
     }
     DestroyWindow(hwnd);
   }
-  ReleaseMutex(hRenderMutex);
+  UnlockRenderThread();
   return 1;
 }
 
@@ -591,8 +616,9 @@ bool GAME::TryMakeTurn(UINT x, UINT y, GAME_TURN turn) {
     field.SetCellValue(x, y, turn);
     SendSynchMessage(x, y);
     return true;
+  } else {
+    UnlockRenderThread();
   }
-  ReleaseMutex(hRenderMutex);
   return false;
 }
 
@@ -600,7 +626,7 @@ bool GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
   if (!SetWinTitle(field.GetTurn())) {
     return false;
   }
-  ReleaseMutex(hRenderMutex);
+  UnlockRenderThread();
   switch (field.CheckGameField(wParam, lParam)) {
     case NOUGHTS: {
       MessageBox(hwnd, szNPWinnerMessage, _T("Game over"), MB_OK);
@@ -618,7 +644,9 @@ bool GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
       return true;
     }
   }
-  DestroyWindow(hwnd);
+  if (!game.Close()) {
+    return 1;
+  }
   return true;
 }
 
@@ -660,7 +688,7 @@ void GAME::Render() {
   } t;
 
   while (isRenderThreadActive) {
-    WaitForSingleObject(hRenderMutex, INFINITE);
+    WaitForSingleObject(hRenderSemaphore, INFINITE);
 
     ++t;
     COLOR beetweenClr = bgColor * 0.67f;
@@ -733,7 +761,7 @@ void GAME::Render() {
     hPen = (HPEN)SelectObject(backHDC, hDefaultPen);
     DeleteObject(hPen);
 
-    ReleaseMutex(hRenderMutex);
+    ReleaseSemaphore(hRenderSemaphore, 1, NULL);
     RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE);
 
     Sleep(1000 / 60);
