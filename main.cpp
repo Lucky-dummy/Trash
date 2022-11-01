@@ -232,6 +232,11 @@ inline void UnlockRenderThread() {
 LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
                                  LPARAM lParam) {
   switch (message) {
+    case WM_CLOSE: {
+      if (!game.Close()) {
+        return 1;
+      }
+    }
     case WM_DESTROY: {
       PostQuitMessage(0);
       return 0;
@@ -354,7 +359,7 @@ int main(int argc, char** argv) {
 
   isRenderThreadActive = true;
   isRenderThreadPaused = false;
-  hRenderSemaphore = CreateSemaphore(NULL, 1, 1, szSemaphoreName);
+  hRenderSemaphore = CreateSemaphore(NULL, 1, 1, NULL);
   hRenderThread =
       CreateThread(NULL, 0, RenderThreadFunction, NULL, 0, RENDER_THREAD_ID);
 
@@ -510,12 +515,14 @@ UINT FIELD::GetSize() { return size; }
 GAME::~GAME() {}
 
 bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
-  if (!(wmSynch = RegisterWindowMessage((LPCWSTR) "WM_TTTSYNCH"))) return 0;
+  if (!(wmSynch = RegisterWindowMessage((LPCTSTR) _T("WM_TTTSYNCH")))) return 0;
 
   UINT size = ReadFromFile();
-  bool isFirst = (!field.TryOpenFileMapping() && (argc > 1));
-  if (isFirst) {
+  if (!field.TryOpenFileMapping() && (argc > 1)) {
     size = atoi(argv[1]);
+    if (!WriteToFile()) {
+      return 0;
+    }
   }
   if (!field.Create(size)) {
     return 0;
@@ -538,19 +545,6 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
   HBRUSH hBrush = CreateSolidBrush(bgColor.GetColorref());
   hBrush = (HBRUSH)(DWORD_PTR)SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND,
                                               (LONG)hBrush);
-
-  if (isFirst) {
-    if (!WriteToFile()) {
-      return 0;
-    }
-  }
-  /*GetClientRect(hwnd, &clientRect);
-  HDC hdc = GetDC(hwnd);
-  backBMP = CreateCompatibleBitmap(hdc, res.width, res.height);
-  backHDC = CreateCompatibleDC(hdc);
-  ReleaseDC(hwnd, hdc);
-  SelectObject(backHDC, backBMP);
-  DeleteObject(backBMP);*/
 
   DeleteObject(hBrush);
   DefineColorChangeState(linesColor, linesColorChange);
@@ -975,5 +969,5 @@ void GAME::ChangeColorDown(COLOR& color, COLOR_CHANGE_STATE& colorState,
 }
 
 void GAME::SendSynchMessage(UINT x, UINT y) {
-  SendMessage(HWND_BROADCAST, wmSynch, x, y);
+  PostMessage(HWND_BROADCAST, wmSynch, x, y);
 }
