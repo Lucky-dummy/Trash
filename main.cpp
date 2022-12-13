@@ -286,7 +286,8 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
         }
         default: {
           if (wParam > 48 && wParam < 56) {
-            if (!SetThreadPriority(hRenderThread, DefineThreadPriority(wParam))) {
+            if (!SetThreadPriority(hRenderThread,
+                                   DefineThreadPriority(wParam))) {
               _tprintf(_T("Thread priority changing error!\n"));
             }
           }
@@ -588,7 +589,6 @@ void GAME::Resize() {
   res.height = clientRect.bottom;
 
   HDC hdc;
-  GetClientRect(hwnd, &clientRect);
   hdc = GetDC(hwnd);
   backHDC = CreateCompatibleDC(hdc);
   backBMP = CreateCompatibleBitmap(hdc, clientRect.right, clientRect.bottom);
@@ -608,7 +608,7 @@ void GAME::ChangeBgColor() {
 bool GAME::TryMakeTurn(UINT x, UINT y, GAME_TURN turn) {
   if (turn == field.GetTurn()) {
     field.SetCellValue(x, y, turn);
-    SendSynchMessage(x, y);
+    SendSynchMessage(field.CheckGameField(x, y), NULL);
     return true;
   } else {
     UnlockRenderThread();
@@ -621,7 +621,7 @@ bool GAME::ProccessSynchMessage(WPARAM wParam, LPARAM lParam) {
     return false;
   }
   UnlockRenderThread();
-  switch (field.CheckGameField(wParam, lParam)) {
+  switch (wParam) {
     case NOUGHTS: {
       MessageBox(hwnd, szNPWinnerMessage, _T("Game over"), MB_OK);
       break;
@@ -718,7 +718,7 @@ void GAME::Render() {
     hPen = (HPEN)SelectObject(backHDC, hDefaultPen);
     DeleteObject(hPen);
 
-    hPen = CreatePen(PS_SOLID, NULL, bgColor.GetContrast());
+    hPen = CreatePen(PS_SOLID, 3, bgColor.GetContrast());
     hDefaultPen = (HPEN)SelectObject(backHDC, hPen);
     HBRUSH hDefaultBrush =
         (HBRUSH)SelectObject(backHDC, GetStockObject(NULL_BRUSH));
