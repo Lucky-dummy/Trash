@@ -164,6 +164,7 @@ class GAME {
         bgColor(0, 0, 255),
         linesColor(255, 0, 0),
         linesColorChange(GREEN_UP),
+        hwnd(NULL),
         wmSynch(0),
         backHDC(0),
         backBMP() {}
@@ -177,7 +178,7 @@ class GAME {
   void Display();
   void Resize();
   void ChangeBgColor();
-  bool TryMakeTurn(UINT x, UINT y, GAME_TURN turn);
+  bool TryMakeTurn(LPARAM lParam, GAME_TURN turn);
   bool ProccessSynchMessage(WPARAM wParam, LPARAM lParam);
   void Render();
   void ChangeLinesColorUp();
@@ -297,18 +298,12 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam,
     }
     case WM_LBUTTONUP: {
       LockRenderThread();
-      RESOLUTION coords = game.GetRes();
-      coords.width = GET_X_LPARAM(lParam) / (coords.width / game.GetSize());
-      coords.height = GET_Y_LPARAM(lParam) / (coords.height / game.GetSize());
-      game.TryMakeTurn(coords.width, coords.height, NOUGHTS);
+      game.TryMakeTurn(lParam, NOUGHTS);
       return 0;
     }
     case WM_RBUTTONUP: {
       LockRenderThread();
-      RESOLUTION coords = game.GetRes();
-      coords.width = GET_X_LPARAM(lParam) / (coords.width / game.GetSize());
-      coords.height = GET_Y_LPARAM(lParam) / (coords.height / game.GetSize());
-      game.TryMakeTurn(coords.width, coords.height, CROSSES);
+      game.TryMakeTurn(lParam, CROSSES);
       return 0;
     }
     case WM_PAINT: {
@@ -521,11 +516,18 @@ bool GAME::Create(int argc, char** argv, HINSTANCE hThisInstance) {
   UINT size = ReadFromFile();
   if (!field.TryOpenFileMapping() && (argc > 1)) {
     size = atoi(argv[1]);
+    if (argc > 3) {
+      res.width = atoi(argv[2]);
+      res.height = atoi(argv[3]);
+    }
+    if (!field.Create(size)) {
+      return 0;
+    }
     if (!WriteToFile()) {
       return 0;
     }
   }
-  if (!field.Create(size)) {
+  else if (!field.Create(size)) {
     return 0;
   }
 
@@ -605,13 +607,22 @@ void GAME::ChangeBgColor() {
   DeleteObject(hBrush);
 }
 
-bool GAME::TryMakeTurn(UINT x, UINT y, GAME_TURN turn) {
+bool GAME::TryMakeTurn(LPARAM lParam, GAME_TURN turn) {
   if (turn == field.GetTurn()) {
-    field.SetCellValue(x, y, turn);
-    SendSynchMessage(field.CheckGameField(x, y), NULL);
+    RESOLUTION coords = game.GetRes();
+    coords.width = GET_X_LPARAM(lParam) / (coords.width / game.GetSize());
+    coords.height = GET_Y_LPARAM(lParam) / (coords.height / game.GetSize());
+    field.SetCellValue(coords.width, coords.height, turn);
+    SendSynchMessage(field.CheckGameField(coords.width, coords.height), NULL);
     return true;
   } else {
     UnlockRenderThread();
+    if (field.GetTurn() == GAME_TURN::NOUGHTS) {
+      MessageBox(hwnd, _T("Now is noughts turn"), _T("Wrong turn"), MB_OK);
+    }
+    else {
+      MessageBox(hwnd, _T("Now is crosses turn"), _T("Wrong turn"), MB_OK);
+    }
   }
   return false;
 }
@@ -834,12 +845,17 @@ bool GAME::WriteToFile() {
   UINT8* buffer = new UINT8[BYTES_TO_READ];
   DWORD dwBytesToWrite = BYTES_TO_READ;
 
-  RECT rect;
-  GetWindowRect(hwnd, &rect);
-
   UIntToUChar(field.GetSize(), buffer);
-  UIntToUChar(rect.right - rect.left, buffer + 4);
-  UIntToUChar(rect.bottom - rect.top, buffer + 8);
+
+  if (hwnd != NULL) {
+    RECT rect;
+    GetWindowRect(hwnd, &rect);
+    UIntToUChar(rect.right - rect.left, buffer + 4);
+    UIntToUChar(rect.bottom - rect.top, buffer + 8);
+  } else {
+    UIntToUChar(res.width, buffer + 4);
+    UIntToUChar(res.height, buffer + 8);
+  }
   bgColor.ToUChar(buffer + 12);
   linesColor.ToUChar(buffer + 15);
 
